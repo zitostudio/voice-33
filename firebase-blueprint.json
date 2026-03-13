@@ -1,0 +1,32 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "User profile information",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "host", "listener"] },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "Room": {
+      "title": "Room",
+      "description": "Voice room information",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "password": { "type": "string" },
+        "hasPassword": { "type": "boolean" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "activeHosts": { "type": "object" }
+      },
+      "required": ["name", "createdBy", "createdAt"]
+    }
+  }
+}

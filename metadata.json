@@ -1,0 +1,5 @@
+{
+  "name": "Voice 33",
+  "description": "A real-time voice room application with Agora integration, featuring admin-managed rooms and role-based access control.",
+  "requestFramePermissions": ["microphone"]
+}
