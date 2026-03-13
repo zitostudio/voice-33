@@ -27,6 +27,7 @@ export default function Login({ onLogin }: LoginProps) {
           <img src="https://www.google.com/favicon.ico" className="w-5 h-5" alt="Google" />
           Masuk dengan Google
         </button>
+        <p className="text-slate-500 text-xs mt-4">powered by zito studio</p>
       </motion.div>
     </div>
   );
