@@ -8,9 +8,11 @@ import { Plus, Trash2, Users, Lock, LogIn } from 'lucide-react';
 interface DashboardProps {
   profile: UserProfile;
   onJoinRoom: (room: RoomType) => void;
+  activeRoomId?: string;
+  onReturnToRoom?: () => void;
 }
 
-export default function Dashboard({ profile, onJoinRoom }: DashboardProps) {
+export default function Dashboard({ profile, onJoinRoom, activeRoomId, onReturnToRoom }: DashboardProps) {
   const [rooms, setRooms] = useState<RoomType[]>([]);
   const [showCreate, setShowCreate] = useState(false);
   const [showUserManagement, setShowUserManagement] = useState(false);
@@ -24,7 +26,7 @@ export default function Dashboard({ profile, onJoinRoom }: DashboardProps) {
     const unsubscribe = onValue(usersRef, (snap) => {
       const data = snap.val();
       if (data) {
-        setAllUsers(Object.values(data) as UserProfile[]);
+        setAllUsers(Object.entries(data).map(([uid, val]: [string, any]) => ({ uid, ...val } as UserProfile)));
       } else {
         setAllUsers([]);
       }
@@ -105,6 +107,25 @@ export default function Dashboard({ profile, onJoinRoom }: DashboardProps) {
       className="space-y-6"
     >
       <AnimatePresence>
+        {activeRoomId && onReturnToRoom && (
+          <motion.div 
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="bg-indigo-600/20 border border-indigo-500/30 p-4 rounded-2xl flex items-center justify-between gap-4 mb-6"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+              <p className="text-sm font-medium">Anda masih terhubung di sebuah ruangan</p>
+            </div>
+            <button 
+              onClick={onReturnToRoom}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-bold transition-colors"
+            >
+              Kembali ke Ruangan
+            </button>
+          </motion.div>
+        )}
         {deletingId && (
           <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
             <motion.div 
@@ -243,41 +264,46 @@ export default function Dashboard({ profile, onJoinRoom }: DashboardProps) {
         )}
       </AnimatePresence>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4">
         {rooms.map((room) => (
           <motion.div 
             key={room.id}
             layout
-            className="glass-card p-6 flex flex-col justify-between"
+            className={`glass-card p-3 sm:p-6 flex flex-col justify-between transition-all ${activeRoomId === room.id ? 'ring-2 ring-indigo-500 bg-indigo-500/5' : ''}`}
           >
             <div>
-              <div className="flex items-start justify-between mb-2">
-                <h3 className="text-xl font-bold">{room.name}</h3>
-                {room.hasPassword && <Lock className="w-4 h-4 text-slate-500" />}
+              <div className="flex items-start justify-between mb-1 sm:mb-2">
+                <div className="flex items-center gap-1 sm:gap-2">
+                  <h3 className="text-sm sm:text-xl font-bold truncate max-w-[80px] sm:max-w-none">{room.name}</h3>
+                  {activeRoomId === room.id && (
+                    <span className="bg-green-500/20 text-green-400 text-[8px] sm:text-[10px] uppercase px-1.5 sm:px-2 py-0.5 rounded-full font-bold">Aktif</span>
+                  )}
+                </div>
+                {room.hasPassword && <Lock className="w-3 h-3 sm:w-4 sm:h-4 text-slate-500" />}
               </div>
               {room.description && (
-                <p className="text-sm text-slate-300 mb-4 line-clamp-2">{room.description}</p>
+                <p className="text-[10px] sm:text-sm text-slate-300 mb-2 sm:mb-4 line-clamp-1 sm:line-clamp-2">{room.description}</p>
               )}
-              <div className="flex items-center gap-4 text-sm text-slate-400 mb-6">
+              <div className="flex items-center gap-2 sm:gap-4 text-[10px] sm:text-sm text-slate-400 mb-3 sm:mb-6">
                 <span className="flex items-center gap-1">
-                  <Users className="w-4 h-4" /> {Object.keys(room.participants || {}).length} Peserta
+                  <Users className="w-3 h-3 sm:w-4 sm:h-4" /> {Object.keys(room.participants || {}).length}
                 </span>
               </div>
             </div>
             
-            <div className="flex gap-2">
+            <div className="flex flex-col sm:flex-row gap-1.5 sm:gap-2">
               <button 
-                onClick={() => onJoinRoom(room)}
-                className="btn-primary py-2 flex-1 flex items-center justify-center gap-2"
+                onClick={() => activeRoomId === room.id ? onReturnToRoom?.() : onJoinRoom(room)}
+                className={`btn-primary py-1.5 sm:py-2 flex-1 flex items-center justify-center gap-1 sm:gap-2 text-[10px] sm:text-sm ${activeRoomId === room.id ? 'bg-indigo-600' : ''}`}
               >
-                <LogIn className="w-4 h-4" /> Gabung Ruangan
+                <LogIn className="w-3 h-3 sm:w-4 sm:h-4" /> {activeRoomId === room.id ? 'Kembali' : 'Gabung'}
               </button>
               {profile.role === 'admin' && (
                 <button 
                   onClick={() => setDeletingId(room.id)}
-                  className="p-2 bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded-xl transition-colors"
+                  className="p-1.5 sm:p-2 bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded-lg sm:rounded-xl transition-colors flex items-center justify-center"
                 >
-                  <Trash2 className="w-5 h-5" />
+                  <Trash2 className="w-4 h-4 sm:w-5 sm:h-5" />
                 </button>
               )}
             </div>

@@ -64,17 +64,21 @@ export const signInWithGoogle = async () => {
 export const logout = () => signOut(auth);
 
 // Connection test using the special .info/connected path (no permissions required)
+export function onConnectionStateChange(callback: (connected: boolean) => void) {
+  const connectedRef = ref(db, ".info/connected");
+  return onValue(connectedRef, (snap) => {
+    callback(snap.val() === true);
+  });
+}
+
 async function testConnection() {
   try {
-    const connectedRef = ref(db, ".info/connected");
-    onValue(connectedRef, (snap) => {
-      if (snap.val() === true) {
+    onConnectionStateChange((connected) => {
+      if (connected) {
         console.log("Connected to Firebase Realtime Database");
       } else {
         console.log("Disconnected from Firebase Realtime Database");
       }
-    }, (error) => {
-      handleRTDBError(error, OperationType.GET, ".info/connected");
     });
   } catch (error: any) {
     handleRTDBError(error, OperationType.GET, ".info/connected");

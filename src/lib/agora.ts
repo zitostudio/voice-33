@@ -12,6 +12,7 @@ export class AgoraService {
   private currentJoinId = 0;
   private leavePromise: Promise<void> | null = null;
   public onVolumeChange: ((volumes: { uid: string, level: number }[]) => void) | null = null;
+  public onConnectionStateChange: ((state: string) => void) | null = null;
   private remoteAudioTracks: Map<string, IRemoteAudioTrack> = new Map();
 
   private initClient() {
@@ -19,6 +20,13 @@ export class AgoraService {
       this.client = AgoraRTC.createClient({ mode: 'rtc', codec: 'vp8' });
       
       this.client.enableAudioVolumeIndicator();
+
+      this.client.on('connection-state-change', (curState, revState, reason) => {
+        console.log(`Agora Connection State Change: ${revState} -> ${curState}, reason: ${reason}`);
+        if (this.onConnectionStateChange) {
+          this.onConnectionStateChange(curState);
+        }
+      });
 
       this.client.on('volume-indicator', (volumes) => {
         if (this.onVolumeChange) {
@@ -31,7 +39,14 @@ export class AgoraService {
           await this.client?.subscribe(user, mediaType);
           if (mediaType === 'audio' && user.audioTrack) {
             this.remoteAudioTracks.set(String(user.uid), user.audioTrack);
-            user.audioTrack.play();
+            try {
+              user.audioTrack.play();
+            } catch (playError: any) {
+              const msg = playError?.message || String(playError);
+              if (!msg.includes('The play() request was interrupted')) {
+                console.warn('Agora audio play interrupted:', playError);
+              }
+            }
           }
         } catch (error) {
           console.error('Error subscribing to user', error);
@@ -56,8 +71,11 @@ export class AgoraService {
         } else {
           track.play();
         }
-      } catch (error) {
-        console.error('Error toggling remote mute', error);
+      } catch (error: any) {
+        const msg = error?.message || String(error);
+        if (!msg.includes('The play() request was interrupted')) {
+          console.error('Error toggling remote mute', error);
+        }
       }
     }
   }
@@ -167,11 +185,26 @@ export class AgoraService {
     this.isJoining = false; // Reset joining state so new joins can start immediately
     
     const doLeave = async () => {
+      if (this.client) {
+        try {
+          if (this.localAudioTrack && this.client.connectionState === 'CONNECTED') {
+            await this.client.unpublish([this.localAudioTrack]);
+          }
+        } catch (e) {
+          console.warn('Error unpublishing during leave', e);
+        }
+      }
+
       if (this.localAudioTrack) {
-        this.localAudioTrack.stop();
-        this.localAudioTrack.close();
+        try {
+          this.localAudioTrack.stop();
+          this.localAudioTrack.close();
+        } catch (e) {
+          console.warn('Error closing track during leave', e);
+        }
         this.localAudioTrack = null;
       }
+
       if (this.client) {
         try {
           if (this.client.connectionState !== 'DISCONNECTED') {
@@ -183,6 +216,7 @@ export class AgoraService {
           }
         }
       }
+      this.remoteAudioTracks.clear();
     };
 
     if (this.leavePromise) {

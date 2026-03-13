@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { auth, db, signInWithGoogle, logout, firebaseConfig, handleRTDBError, OperationType } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { ref, get, set, onValue, remove, onDisconnect } from 'firebase/database';
+import { ref, get, set, onValue, remove, onDisconnect, goOffline, goOnline } from 'firebase/database';
 import { UserProfile, Room as RoomType } from './types';
 import { agoraService } from './lib/agora';
 import Login from './components/Login';
@@ -17,20 +17,53 @@ export default function App() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [currentRoom, setCurrentRoom] = useState<RoomType | null>(null);
+  const [view, setView] = useState<'dashboard' | 'room'>('dashboard');
+
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   const handleLogout = async () => {
+    if (isLoggingOut) return;
+    setIsLoggingOut(true);
+    
     if (currentRoom && profile) {
       try {
-        await agoraService.leave();
-        await remove(ref(db, `rooms/${currentRoom.id}/activeHosts/${profile.uid}`));
-        onDisconnect(ref(db, `rooms/${currentRoom.id}/activeHosts/${profile.uid}`)).cancel();
-        await remove(ref(db, `rooms/${currentRoom.id}/participants/${profile.uid}`));
-        onDisconnect(ref(db, `rooms/${currentRoom.id}/participants/${profile.uid}`)).cancel();
+        // Remove from database immediately so they disappear for others in real-time
+        const removeHostsPromise = remove(ref(db, `rooms/${currentRoom.id}/activeHosts/${profile.uid}`)).catch(console.error);
+        const removeParticipantsPromise = remove(ref(db, `rooms/${currentRoom.id}/participants/${profile.uid}`)).catch(console.error);
+        
+        onDisconnect(ref(db, `rooms/${currentRoom.id}/activeHosts/${profile.uid}`)).cancel().catch(console.error);
+        onDisconnect(ref(db, `rooms/${currentRoom.id}/participants/${profile.uid}`)).cancel().catch(console.error);
+        
+        await Promise.all([removeHostsPromise, removeParticipantsPromise, agoraService.leave().catch(console.error)]);
       } catch (error) {
         console.error("Error leaving room on logout", error);
       }
+    } else {
+      // Just in case they are not in a room but Agora is connected
+      await agoraService.leave().catch(console.error);
     }
-    await logout();
+    
+    // Force disconnect to trigger any remaining onDisconnect handlers on the server
+    goOffline(db);
+    
+    try {
+      await logout();
+    } catch (error) {
+      console.error("Error during Firebase logout", error);
+    }
+    
+    // Reconnect for the next user or login screen
+    goOnline(db);
+    
+    // Clear all local states
+    setCurrentRoom(null);
+    setView('dashboard');
+    setUser(null);
+    setProfile(null);
+    setIsLoggingOut(false);
+    
+    // Hard reload to completely clear React state, Agora cache, and memory
+    window.location.href = '/';
   };
 
   useEffect(() => {
@@ -122,21 +155,46 @@ export default function App() {
               <p className="text-xs text-slate-400 capitalize">{profile.role}</p>
             </div>
           </div>
-          <button onClick={handleLogout} className="text-sm text-slate-400 hover:text-white transition-colors">
-            Logout
+          <button 
+            onClick={handleLogout} 
+            disabled={isLoggingOut}
+            className="text-sm text-slate-400 hover:text-white transition-colors flex items-center gap-2 disabled:opacity-50"
+          >
+            {isLoggingOut ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span>Keluar...</span>
+              </>
+            ) : (
+              'Logout'
+            )}
           </button>
         </header>
 
-        {currentRoom ? (
-          <Room 
-            room={currentRoom} 
-            profile={profile} 
-            onLeave={() => setCurrentRoom(null)} 
-          />
-        ) : (
+        {currentRoom && (
+          <div className={view === 'room' ? 'block' : 'absolute opacity-0 pointer-events-none -z-10 w-0 h-0 overflow-hidden'}>
+            <Room 
+              key={currentRoom.id}
+              room={currentRoom} 
+              profile={profile} 
+              onLeave={() => {
+                setCurrentRoom(null);
+                setView('dashboard');
+              }} 
+              onBack={() => setView('dashboard')}
+            />
+          </div>
+        )}
+
+        {view === 'dashboard' && (
           <Dashboard 
             profile={profile} 
-            onJoinRoom={setCurrentRoom} 
+            onJoinRoom={(room) => {
+              setCurrentRoom(room);
+              setView('room');
+            }} 
+            activeRoomId={currentRoom?.id}
+            onReturnToRoom={() => setView('room')}
           />
         )}
       </div>

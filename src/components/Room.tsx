@@ -1,20 +1,26 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { db, handleRTDBError, OperationType } from '../firebase';
+import { db, handleRTDBError, OperationType, onConnectionStateChange } from '../firebase';
 import { ref, onValue, update, remove, set, onDisconnect } from 'firebase/database';
 import { UserProfile, Room as RoomType } from '../types';
 import { agoraService } from '../lib/agora';
-import { motion } from 'motion/react';
-import { Mic, MicOff, Power, Users, Shield, User as UserIcon } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+import { Mic, MicOff, Power, Users, Shield, User as UserIcon, ArrowLeft } from 'lucide-react';
 
 interface RoomProps {
   room: RoomType;
   profile: UserProfile;
   onLeave: () => void;
+  onBack?: () => void;
+  key?: string | number;
 }
 
-export default function Room({ room, profile, onLeave }: RoomProps) {
+export default function Room({ room, profile, onLeave, onBack }: RoomProps) {
   const [isJoined, setIsJoined] = useState(false);
+  const [isJoining, setIsJoining] = useState(false);
+  const [hasSeenSelf, setHasSeenSelf] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
+  const [isFirebaseConnected, setIsFirebaseConnected] = useState(true);
+  const [agoraConnectionState, setAgoraConnectionState] = useState('DISCONNECTED');
   const [roomData, setRoomData] = useState<RoomType>(room);
   const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
   const [password, setPassword] = useState('');
@@ -22,9 +28,18 @@ export default function Room({ room, profile, onLeave }: RoomProps) {
   const [notification, setNotification] = useState<string | null>(null);
   const [showPassModal, setShowPassModal] = useState(room.hasPassword && profile.role === 'listener');
   const [activeSpeakers, setActiveSpeakers] = useState<Record<string, number>>({});
+  
   const prevRoleRef = useRef(profile.role);
   const onLeaveRef = useRef(onLeave);
   const prevMutedRef = useRef(false);
+  const isMounted = useRef(true);
+
+  useEffect(() => {
+    isMounted.current = true;
+    return () => {
+      isMounted.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     onLeaveRef.current = onLeave;
@@ -35,6 +50,7 @@ export default function Room({ room, profile, onLeave }: RoomProps) {
       prevRoleRef.current = profile.role;
       if (isJoined) {
         agoraService.changeRole(profile.role === 'listener' ? 'listener' : 'host').then(() => {
+          if (!isMounted.current) return;
           if (profile.role !== 'listener') {
             setIsMuted(false);
             set(ref(db, `rooms/${room.id}/activeHosts/${profile.uid}`), true).catch(() => {});
@@ -44,6 +60,7 @@ export default function Room({ room, profile, onLeave }: RoomProps) {
             onDisconnect(ref(db, `rooms/${room.id}/activeHosts/${profile.uid}`)).cancel().catch(() => {});
           }
         }).catch(err => {
+          if (!isMounted.current) return;
           console.error('Failed to change role in voice channel', err);
           if (err.message === 'MIC_DENIED') {
             setIsMuted(true);
@@ -61,8 +78,15 @@ export default function Room({ room, profile, onLeave }: RoomProps) {
   useEffect(() => {
     const roomRef = ref(db, `rooms/${room.id}`);
     const unsubscribe = onValue(roomRef, (snap) => {
+      if (!isMounted.current) return;
       if (snap.exists()) {
-        setRoomData({ id: snap.key, ...snap.val() } as RoomType);
+        const data = snap.val();
+        setRoomData({ id: snap.key, ...data } as RoomType);
+        
+        // If we see ourselves in the participants list, mark as seen
+        if (data.participants && data.participants[profile.uid]) {
+          setHasSeenSelf(true);
+        }
       } else {
         onLeaveRef.current();
       }
@@ -73,9 +97,10 @@ export default function Room({ room, profile, onLeave }: RoomProps) {
     // Fetch all users to show roles/profiles
     const usersRef = ref(db, 'users');
     const usersUnsubscribe = onValue(usersRef, (snap) => {
+      if (!isMounted.current) return;
       const data = snap.val();
       if (data) {
-        setAllUsers(Object.values(data) as UserProfile[]);
+        setAllUsers(Object.entries(data).map(([uid, val]: [string, any]) => ({ uid, ...val } as UserProfile)));
       } else {
         setAllUsers([]);
       }
@@ -84,6 +109,7 @@ export default function Room({ room, profile, onLeave }: RoomProps) {
     });
 
     agoraService.onVolumeChange = (volumes) => {
+      if (!isMounted.current) return;
       const speakers: Record<string, number> = {};
       volumes.forEach(v => {
         // Agora volume level is 0-100. Let's say > 5 is speaking.
@@ -95,10 +121,22 @@ export default function Room({ room, profile, onLeave }: RoomProps) {
       setActiveSpeakers(speakers);
     };
 
+    agoraService.onConnectionStateChange = (state) => {
+      if (!isMounted.current) return;
+      setAgoraConnectionState(state);
+    };
+
+    const unsubscribeConn = onConnectionStateChange((connected) => {
+      if (!isMounted.current) return;
+      setIsFirebaseConnected(connected);
+    });
+
     return () => {
       unsubscribe();
       usersUnsubscribe();
+      unsubscribeConn();
       agoraService.onVolumeChange = null;
+      agoraService.onConnectionStateChange = null;
       // Cleanup voice connection safely
       agoraService.leave().catch(err => console.error('Error during voice cleanup', err));
       remove(ref(db, `rooms/${room.id}/activeHosts/${profile.uid}`)).catch(() => {});
@@ -109,18 +147,27 @@ export default function Room({ room, profile, onLeave }: RoomProps) {
   }, [room.id, profile.uid]);
 
   const handleJoin = async () => {
-    if (!room.id || !profile.uid) return;
+    if (!room.id || !profile.uid || isJoining || isJoined) return;
 
     if (roomData.hasPassword && profile.role === 'listener' && password !== roomData.password) {
       setError('Incorrect password. Please try again.');
       return;
     }
 
+    setIsJoining(true);
+    setError(null);
+
     try {
       await agoraService.join(room.id, profile.uid, profile.role === 'listener' ? 'listener' : 'host');
+      
+      if (!isMounted.current) {
+        agoraService.leave().catch(() => {});
+        return;
+      }
+
       setIsJoined(true);
+      setIsJoining(false);
       setShowPassModal(false);
-      setError(null);
       
       if (profile.role !== 'listener') {
         const hasMic = agoraService.hasLocalAudioTrack();
@@ -146,6 +193,8 @@ export default function Room({ room, profile, onLeave }: RoomProps) {
         handleRTDBError(error, OperationType.UPDATE, `rooms/${room.id}/participants/${profile.uid}`);
       }
     } catch (error: any) {
+      if (!isMounted.current) return;
+      setIsJoining(false);
       if (error?.message?.includes('OPERATION_ABORTED') || error?.message?.includes('cancel token canceled')) {
         // Ignore this error, it's caused by React Strict Mode or rapid leave/join
         return;
@@ -156,16 +205,54 @@ export default function Room({ room, profile, onLeave }: RoomProps) {
   };
 
   useEffect(() => {
-    if (!showPassModal && !isJoined) {
+    if (!showPassModal && !isJoined && !isJoining) {
       handleJoin();
     }
-  }, [showPassModal, isJoined]);
+  }, [showPassModal, isJoined, isJoining]);
+
+  // Handle automatic reconnection when internet returns
+  useEffect(() => {
+    if (isFirebaseConnected && isJoined) {
+      console.log("Internet restored, ensuring presence and voice connection...");
+      
+      // Re-register presence in RTDB
+      const reRegister = async () => {
+        try {
+          await set(ref(db, `rooms/${room.id}/participants/${profile.uid}`), true);
+          onDisconnect(ref(db, `rooms/${room.id}/participants/${profile.uid}`)).remove();
+          if (profile.role !== 'listener') {
+            await set(ref(db, `rooms/${room.id}/activeHosts/${profile.uid}`), true);
+            onDisconnect(ref(db, `rooms/${room.id}/activeHosts/${profile.uid}`)).remove();
+          }
+        } catch (e) {
+          console.error("Failed to re-register presence", e);
+        }
+      };
+      
+      reRegister();
+
+      // Check Agora connection state
+      // If Agora is disconnected or failed, we need to trigger handleJoin again
+      if (agoraConnectionState === 'DISCONNECTED') {
+        console.log("Agora disconnected after internet recovery, rejoining...");
+        setIsJoined(false); // This will trigger the handleJoin useEffect
+      }
+    }
+  }, [isFirebaseConnected, isJoined, agoraConnectionState, room.id, profile.uid, profile.role]);
 
   useEffect(() => {
-    if (isJoined && roomData.participants && !roomData.participants[profile.uid]) {
+    // Only kick if we have successfully joined and seen ourselves in the list,
+    // and now we are missing. This prevents the race condition during join
+    // where roomData might still hold the old state for a render cycle.
+    if (isJoined && hasSeenSelf && roomData.participants && !roomData.participants[profile.uid]) {
+      // If we are currently disconnected from Firebase, don't kick yet. 
+      // Wait for reconnection logic to try and put us back.
+      if (!isFirebaseConnected || isJoining) return;
+
+      console.log("User removed from participants list, leaving room...");
       onLeaveRef.current();
     }
-  }, [isJoined, roomData.participants, profile.uid]);
+  }, [isJoined, hasSeenSelf, roomData.participants, profile.uid, isFirebaseConnected, isJoining]);
 
 
   const handleLeave = async () => {
@@ -242,6 +329,8 @@ export default function Room({ room, profile, onLeave }: RoomProps) {
     }
   }, [isJoined, roomData.mutedUsers, profile.uid]);
 
+  const isReconnecting = isJoined && (!isFirebaseConnected || agoraConnectionState === 'RECONNECTING' || agoraConnectionState === 'CONNECTING');
+
   if (showPassModal) {
     return (
       <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
@@ -272,13 +361,35 @@ export default function Room({ room, profile, onLeave }: RoomProps) {
     <motion.div 
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      className="space-y-6"
+      className="relative space-y-6"
     >
+      {isReconnecting && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-[2px] z-40 flex items-center justify-center pointer-events-none">
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-indigo-600 text-white px-6 py-3 rounded-full shadow-2xl flex items-center gap-3"
+          >
+            <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+            <span className="font-medium">Menghubungkan kembali...</span>
+          </motion.div>
+        </div>
+      )}
       <div className="glass-card p-6">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="text-center">
-            <h2 className="text-2xl font-bold">{roomData.name}</h2>
-            {roomData.description && (
+          <div className="flex items-center gap-4">
+            {onBack && (
+              <button 
+                onClick={onBack}
+                className="p-2 hover:bg-white/10 rounded-full transition-colors"
+                title="Kembali ke Dashboard"
+              >
+                <ArrowLeft className="w-6 h-6" />
+              </button>
+            )}
+            <div className="text-left">
+              <h2 className="text-2xl font-bold">{roomData.name}</h2>
+              {roomData.description && (
               <div className="overflow-hidden whitespace-nowrap mt-1 max-w-full">
                 <motion.p
                   className="text-sm text-slate-400 inline-block"
@@ -290,8 +401,9 @@ export default function Room({ room, profile, onLeave }: RoomProps) {
               </div>
             )}
           </div>
-          
-          <div className="flex flex-wrap justify-center items-center gap-3 md:gap-6 text-xs md:text-sm bg-white/5 p-2 md:p-3 rounded-xl border border-white/10">
+        </div>
+        
+        <div className="flex flex-wrap justify-center items-center gap-3 md:gap-6 text-xs md:text-sm bg-white/5 p-2 md:p-3 rounded-xl border border-white/10">
             <div className="flex flex-col items-center">
               <span className="text-slate-400 text-[9px] md:text-[10px] uppercase tracking-wider mb-0.5">Status</span>
               <div className="flex items-center gap-1">
