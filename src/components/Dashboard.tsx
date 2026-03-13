@@ -260,7 +260,7 @@ export default function Dashboard({ profile, onJoinRoom }: DashboardProps) {
               )}
               <div className="flex items-center gap-4 text-sm text-slate-400 mb-6">
                 <span className="flex items-center gap-1">
-                  <Users className="w-4 h-4" /> {Object.keys(room.activeHosts || {}).length} Host
+                  <Users className="w-4 h-4" /> {Object.keys(room.participants || {}).length} Peserta
                 </span>
               </div>
             </div>

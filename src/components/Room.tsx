@@ -19,10 +19,12 @@ export default function Room({ room, profile, onLeave }: RoomProps) {
   const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [notification, setNotification] = useState<string | null>(null);
   const [showPassModal, setShowPassModal] = useState(room.hasPassword && profile.role === 'listener');
   const [activeSpeakers, setActiveSpeakers] = useState<Record<string, number>>({});
   const prevRoleRef = useRef(profile.role);
   const onLeaveRef = useRef(onLeave);
+  const prevMutedRef = useRef(false);
 
   useEffect(() => {
     onLeaveRef.current = onLeave;
@@ -157,8 +159,14 @@ export default function Room({ room, profile, onLeave }: RoomProps) {
     if (!showPassModal && !isJoined) {
       handleJoin();
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showPassModal, isJoined]);
+
+  useEffect(() => {
+    if (isJoined && roomData.participants && !roomData.participants[profile.uid]) {
+      onLeaveRef.current();
+    }
+  }, [isJoined, roomData.participants, profile.uid]);
+
 
   const handleLeave = async () => {
     await agoraService.leave();
@@ -197,6 +205,43 @@ export default function Room({ room, profile, onLeave }: RoomProps) {
     }
   };
 
+  const kickUser = async (uid: string) => {
+    if (profile.role !== 'admin') return;
+    try {
+      await remove(ref(db, `rooms/${room.id}/participants/${uid}`));
+      await remove(ref(db, `rooms/${room.id}/activeHosts/${uid}`));
+    } catch (error) {
+      handleRTDBError(error, OperationType.DELETE, `rooms/${room.id}/participants/${uid}`);
+    }
+  };
+
+  const toggleMuteUser = async (uid: string) => {
+    if (profile.role !== 'admin') return;
+    const isMuted = !!(roomData.mutedUsers && roomData.mutedUsers[uid]);
+    try {
+      if (isMuted) {
+        await remove(ref(db, `rooms/${room.id}/mutedUsers/${uid}`));
+      } else {
+        await set(ref(db, `rooms/${room.id}/mutedUsers/${uid}`), true);
+      }
+    } catch (error) {
+      handleRTDBError(error, OperationType.UPDATE, `rooms/${room.id}/mutedUsers/${uid}`);
+    }
+  };
+
+  useEffect(() => {
+    if (isJoined && roomData.mutedUsers) {
+      const isMuted = !!roomData.mutedUsers[profile.uid];
+      if (isMuted !== prevMutedRef.current) {
+        agoraService.setMute(isMuted).catch(console.error);
+        agoraService.setRemoteMute(isMuted).catch(console.error);
+        setNotification(isMuted ? 'Anda telah dibisukan oleh admin' : 'Anda telah diizinkan untuk berbicara kembali');
+        setTimeout(() => setNotification(null), 3000);
+        prevMutedRef.current = isMuted;
+      }
+    }
+  }, [isJoined, roomData.mutedUsers, profile.uid]);
+
   if (showPassModal) {
     return (
       <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
@@ -231,36 +276,44 @@ export default function Room({ room, profile, onLeave }: RoomProps) {
     >
       <div className="glass-card p-6">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
+          <div className="text-center">
             <h2 className="text-2xl font-bold">{roomData.name}</h2>
             {roomData.description && (
-              <p className="text-sm text-slate-400 mt-1">{roomData.description}</p>
+              <div className="overflow-hidden whitespace-nowrap mt-1 max-w-full">
+                <motion.p
+                  className="text-sm text-slate-400 inline-block"
+                  animate={{ x: ["100%", "-100%"] }}
+                  transition={{ repeat: Infinity, duration: 15, ease: "linear" }}
+                >
+                  {roomData.description}
+                </motion.p>
+              </div>
             )}
           </div>
           
-          <div className="flex flex-wrap items-center gap-4 md:gap-6 text-sm bg-white/5 p-3 rounded-xl border border-white/10">
-            <div className="flex flex-col">
-              <span className="text-slate-400 text-[10px] uppercase tracking-wider mb-0.5">Status</span>
-              <div className="flex items-center gap-1.5">
-                <div className={`w-2 h-2 rounded-full ${isJoined ? 'bg-green-500' : 'bg-slate-500'}`} />
+          <div className="flex flex-wrap justify-center items-center gap-3 md:gap-6 text-xs md:text-sm bg-white/5 p-2 md:p-3 rounded-xl border border-white/10">
+            <div className="flex flex-col items-center">
+              <span className="text-slate-400 text-[9px] md:text-[10px] uppercase tracking-wider mb-0.5">Status</span>
+              <div className="flex items-center gap-1">
+                <div className={`w-1.5 h-1.5 md:w-2 md:h-2 rounded-full ${isJoined ? 'bg-green-500' : 'bg-slate-500'}`} />
                 <span className={isJoined ? 'text-green-400 font-medium' : 'text-slate-400'}>
-                  {isJoined ? 'Terhubung' : 'Terputus'}
+                  {isJoined ? 'Online' : 'Offline'}
                 </span>
               </div>
             </div>
             
-            <div className="w-px h-8 bg-white/10 hidden sm:block" />
+            <div className="w-px h-6 md:h-8 bg-white/10 hidden sm:block" />
             
-            <div className="flex flex-col">
-              <span className="text-slate-400 text-[10px] uppercase tracking-wider mb-0.5">Peran Anda</span>
+            <div className="flex flex-col items-center">
+              <span className="text-slate-400 text-[9px] md:text-[10px] uppercase tracking-wider mb-0.5">Peran Anda</span>
               <span className="capitalize text-indigo-400 font-medium">{profile.role}</span>
             </div>
             
-            <div className="w-px h-8 bg-white/10 hidden sm:block" />
+            <div className="w-px h-6 md:h-8 bg-white/10 hidden sm:block" />
             
-            <div className="flex flex-col">
-              <span className="text-slate-400 text-[10px] uppercase tracking-wider mb-0.5">Host Aktif</span>
-              <span className="font-medium">{Object.keys(roomData.activeHosts || {}).length}</span>
+            <div className="flex flex-col items-center">
+              <span className="text-slate-400 text-[9px] md:text-[10px] uppercase tracking-wider mb-0.5">Peserta</span>
+              <span className="font-medium">{Object.keys(roomData.participants || {}).length}</span>
             </div>
 
             {!isJoined && (
@@ -278,21 +331,22 @@ export default function Room({ room, profile, onLeave }: RoomProps) {
           </div>
         </div>
         {error && <p className="text-red-500 text-sm bg-red-500/10 p-3 rounded-lg mt-4">{error}</p>}
+        {notification && <p className="text-indigo-400 text-sm bg-indigo-500/10 p-3 rounded-lg mt-4">{notification}</p>}
       </div>
 
       <div className="space-y-4">
         <h3 className="text-lg font-semibold flex items-center gap-2">
           <Users className="w-5 h-5 text-indigo-500" /> Peserta
         </h3>
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+        <div className="grid grid-cols-4 gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 sm:gap-4">
             {allUsers.filter(u => (roomData.participants && roomData.participants[u.uid]) || (roomData.activeHosts && roomData.activeHosts[u.uid])).map((u) => {
               const isActiveHost = !!(roomData.activeHosts && roomData.activeHosts[u.uid]);
               const isSpeaking = isActiveHost && activeSpeakers[u.uid] > 5;
               const speakerScale = isSpeaking ? 1 + (activeSpeakers[u.uid] / 100) * 0.3 : 1;
               
               return (
-                <div key={u.uid} className={`glass-card p-4 text-center relative ${isActiveHost ? 'ring-2 ring-indigo-500' : ''}`}>
-                  <div className="relative w-16 h-16 mx-auto mb-2">
+                <div key={u.uid} className={`glass-card p-2 sm:p-4 text-center relative ${isActiveHost ? 'ring-2 ring-indigo-500' : ''}`}>
+                  <div className="relative w-10 h-10 sm:w-16 sm:h-16 mx-auto mb-1 sm:mb-2">
                     {isSpeaking && (
                       <motion.div 
                         className="absolute inset-0 rounded-full bg-indigo-500/50 blur-md"
@@ -303,49 +357,63 @@ export default function Room({ room, profile, onLeave }: RoomProps) {
                     <img 
                       src={u.photoURL} 
                       alt={u.displayName} 
-                      className={`relative z-10 w-16 h-16 rounded-full border-2 ${isSpeaking ? 'border-indigo-400' : 'border-white/10'} transition-colors duration-200`}
+                      className={`relative z-10 w-10 h-10 sm:w-16 sm:h-16 rounded-full border-2 ${isSpeaking ? 'border-indigo-400' : 'border-white/10'} transition-colors duration-200`}
                       referrerPolicy="no-referrer"
                     />
                   </div>
-                  <p className="font-medium truncate text-sm">{u.displayName}</p>
-                  <p className="text-[10px] uppercase tracking-wider text-slate-500">{u.role}</p>
+                  <p className="font-medium truncate text-[10px] sm:text-sm">{u.displayName}</p>
+                  <p className="text-[8px] sm:text-[10px] uppercase tracking-wider text-slate-500">{u.role}</p>
                   
                   {u.uid === profile.uid && (
-                    <div className="mt-3 flex justify-center gap-2">
+                    <div className="mt-1 sm:mt-3 flex justify-center gap-1 sm:gap-2">
                       {profile.role !== 'listener' && isJoined && (
                         <button 
                           onClick={toggleMute}
-                          className={`p-2 rounded-lg transition-all ${isMuted ? 'bg-red-500 text-white' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                          className={`p-1 sm:p-2 rounded-lg transition-all ${isMuted ? 'bg-red-500 text-white' : 'bg-white/10 text-white hover:bg-white/20'}`}
                           title={isMuted ? 'Nyalakan Mikrofon' : 'Matikan Mikrofon'}
                         >
-                          {isMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                          {isMuted ? <MicOff className="w-3 h-3 sm:w-4 sm:h-4" /> : <Mic className="w-3 h-3 sm:w-4 sm:h-4" />}
                         </button>
                       )}
                       <button 
                         onClick={handleLeave} 
-                        className="p-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-all shadow-md"
+                        className="p-1 sm:p-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-all shadow-md"
                         title="Matikan"
                       >
-                        <Power className="w-4 h-4" />
+                        <Power className="w-3 h-3 sm:w-4 sm:h-4" />
                       </button>
                     </div>
                   )}
 
                   {profile.role === 'admin' && u.uid !== profile.uid && (
-                    <div className="mt-3 flex justify-center gap-1">
+                    <div className="mt-1 sm:mt-3 flex justify-center gap-1">
                       <button 
                         onClick={() => updateUserRole(u.uid, u.role === 'host' ? 'listener' : 'host')}
-                        className="p-1.5 bg-white/5 hover:bg-white/10 rounded-lg transition-colors"
+                        className="p-1 sm:p-1.5 bg-white/5 hover:bg-white/10 rounded-lg transition-colors"
                         title={u.role === 'host' ? 'Jadikan Pendengar' : 'Jadikan Host'}
                       >
-                        <Shield className={`w-3.5 h-3.5 ${u.role === 'host' ? 'text-indigo-400' : 'text-slate-400'}`} />
+                        <Shield className={`w-3 h-3 sm:w-3.5 sm:h-3.5 ${u.role === 'host' ? 'text-indigo-400' : 'text-slate-400'}`} />
+                      </button>
+                      <button 
+                        onClick={() => toggleMuteUser(u.uid)}
+                        className={`p-1 sm:p-1.5 rounded-lg transition-colors ${roomData.mutedUsers && roomData.mutedUsers[u.uid] ? 'bg-red-500/20 text-red-400' : 'bg-white/5 hover:bg-white/10'}`}
+                        title={roomData.mutedUsers && roomData.mutedUsers[u.uid] ? 'Unmute' : 'Mute'}
+                      >
+                        <MicOff className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+                      </button>
+                      <button 
+                        onClick={() => kickUser(u.uid)}
+                        className="p-1 sm:p-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded-lg transition-colors"
+                        title="Kick"
+                      >
+                        <Power className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
                       </button>
                     </div>
                   )}
                   
                   {isActiveHost && (
-                    <div className="absolute top-2 right-2">
-                      <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                    <div className="absolute top-1 right-1 sm:top-2 sm:right-2">
+                      <div className="w-1.5 h-1.5 sm:w-2 sm:h-2 bg-green-500 rounded-full animate-pulse" />
                     </div>
                   )}
                 </div>

@@ -12,6 +12,7 @@ export class AgoraService {
   private currentJoinId = 0;
   private leavePromise: Promise<void> | null = null;
   public onVolumeChange: ((volumes: { uid: string, level: number }[]) => void) | null = null;
+  private remoteAudioTracks: Map<string, IRemoteAudioTrack> = new Map();
 
   private initClient() {
     if (!this.client) {
@@ -28,8 +29,9 @@ export class AgoraService {
       this.client.on('user-published', async (user, mediaType: 'audio' | 'video') => {
         try {
           await this.client?.subscribe(user, mediaType);
-          if (mediaType === 'audio') {
-            user.audioTrack?.play();
+          if (mediaType === 'audio' && user.audioTrack) {
+            this.remoteAudioTracks.set(String(user.uid), user.audioTrack);
+            user.audioTrack.play();
           }
         } catch (error) {
           console.error('Error subscribing to user', error);
@@ -39,10 +41,25 @@ export class AgoraService {
       this.client.on('user-unpublished', (user) => {
         if (user.audioTrack) {
           user.audioTrack.stop();
+          this.remoteAudioTracks.delete(String(user.uid));
         }
       });
     }
     return this.client;
+  }
+
+  async setRemoteMute(muted: boolean) {
+    for (const track of this.remoteAudioTracks.values()) {
+      try {
+        if (muted) {
+          track.stop();
+        } else {
+          track.play();
+        }
+      } catch (error) {
+        console.error('Error toggling remote mute', error);
+      }
+    }
   }
 
   async join(channel: string, uid: string, role: 'host' | 'listener') {

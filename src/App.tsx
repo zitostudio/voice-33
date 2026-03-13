@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { auth, db, signInWithGoogle, logout, firebaseConfig, handleRTDBError, OperationType } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { ref, get, set, onValue } from 'firebase/database';
+import { ref, get, set, onValue, remove, onDisconnect } from 'firebase/database';
 import { UserProfile, Room as RoomType } from './types';
+import { agoraService } from './lib/agora';
 import Login from './components/Login';
 import Dashboard from './components/Dashboard';
 import Room from './components/Room';
@@ -16,6 +17,21 @@ export default function App() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [currentRoom, setCurrentRoom] = useState<RoomType | null>(null);
+
+  const handleLogout = async () => {
+    if (currentRoom && profile) {
+      try {
+        await agoraService.leave();
+        await remove(ref(db, `rooms/${currentRoom.id}/activeHosts/${profile.uid}`));
+        onDisconnect(ref(db, `rooms/${currentRoom.id}/activeHosts/${profile.uid}`)).cancel();
+        await remove(ref(db, `rooms/${currentRoom.id}/participants/${profile.uid}`));
+        onDisconnect(ref(db, `rooms/${currentRoom.id}/participants/${profile.uid}`)).cancel();
+      } catch (error) {
+        console.error("Error leaving room on logout", error);
+      }
+    }
+    await logout();
+  };
 
   useEffect(() => {
     let profileUnsubscribe: (() => void) | null = null;
@@ -106,7 +122,7 @@ export default function App() {
               <p className="text-xs text-slate-400 capitalize">{profile.role}</p>
             </div>
           </div>
-          <button onClick={logout} className="text-sm text-slate-400 hover:text-white transition-colors">
+          <button onClick={handleLogout} className="text-sm text-slate-400 hover:text-white transition-colors">
             Logout
           </button>
         </header>

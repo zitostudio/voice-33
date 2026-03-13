@@ -19,6 +19,7 @@ export interface Room {
   createdAt: any;
   activeHosts: Record<string, boolean>;
   participants?: Record<string, boolean>;
+  mutedUsers?: Record<string, boolean>;
 }
 
 export interface VoiceState {
