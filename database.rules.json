@@ -3,23 +3,52 @@
     "users": {
       ".read": "auth != null",
       "$uid": {
-        ".write": "auth != null && ($uid === auth.uid || root.child('users').child(auth.uid).child('role').val() === 'admin')"
+        ".write": "auth != null && ($uid === auth.uid || root.child('users').child(auth.uid).child('role').val() === 'admin' || (auth.token.email === 'lawangindoofficial@gmail.com' && auth.token.email_verified === true))"
       }
     },
     "rooms": {
       ".read": "auth != null",
       "$room_id": {
-        ".write": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'admin' || !data.exists() || data.child('createdBy').val() === auth.uid)",
+        "participants": {
+          "$uid": {
+            ".write": "auth != null && $uid === auth.uid"
+          }
+        },
         "activeHosts": {
           "$uid": {
             ".write": "auth != null && $uid === auth.uid"
           }
         },
-        "participants": {
+        "mutedUsers": {
           "$uid": {
-            ".write": "auth != null && $uid === auth.uid"
+            ".write": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'admin' || (auth.token.email === 'lawangindoofficial@gmail.com' && auth.token.email_verified === true))"
           }
-        }
+        },
+        "audioUrl": {
+          ".write": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'admin' || (auth.token.email === 'lawangindoofficial@gmail.com' && auth.token.email_verified === true) || data.parent().child('createdBy').val() === auth.uid)"
+        },
+        "isPlaying": {
+          ".write": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'admin' || (auth.token.email === 'lawangindoofficial@gmail.com' && auth.token.email_verified === true) || data.parent().child('createdBy').val() === auth.uid)"
+        },
+        "name": {
+          ".write": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'admin' || (auth.token.email === 'lawangindoofficial@gmail.com' && auth.token.email_verified === true) || data.parent().child('createdBy').val() === auth.uid)"
+        },
+        "description": {
+          ".write": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'admin' || (auth.token.email === 'lawangindoofficial@gmail.com' && auth.token.email_verified === true) || data.parent().child('createdBy').val() === auth.uid)"
+        },
+        "password": {
+          ".write": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'admin' || (auth.token.email === 'lawangindoofficial@gmail.com' && auth.token.email_verified === true) || data.parent().child('createdBy').val() === auth.uid)"
+        },
+        "hasPassword": {
+          ".write": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'admin' || (auth.token.email === 'lawangindoofficial@gmail.com' && auth.token.email_verified === true) || data.parent().child('createdBy').val() === auth.uid)"
+        },
+        "createdBy": {
+          ".write": "auth != null && !data.exists()"
+        },
+        "createdAt": {
+          ".write": "auth != null && !data.exists()"
+        },
+        ".write": "auth != null && (!data.exists() || root.child('users').child(auth.uid).child('role').val() === 'admin' || (auth.token.email === 'lawangindoofficial@gmail.com' && auth.token.email_verified === true) || data.child('createdBy').val() === auth.uid)"
       }
     }
   }

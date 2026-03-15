@@ -4,6 +4,7 @@ import { ref, onValue, push, set, remove, update } from 'firebase/database';
 import { UserProfile, Room as RoomType } from '../types';
 import { motion, AnimatePresence } from 'motion/react';
 import { Plus, Trash2, Users, Lock, LogIn } from 'lucide-react';
+import RoomCard from './RoomCard';
 
 interface DashboardProps {
   profile: UserProfile;
@@ -19,6 +20,7 @@ export default function Dashboard({ profile, onJoinRoom, activeRoomId, onReturnT
   const [newRoomName, setNewRoomName] = useState('');
   const [newRoomDesc, setNewRoomDesc] = useState('');
   const [newRoomPass, setNewRoomPass] = useState('');
+  const [editingRoom, setEditingRoom] = useState<RoomType | null>(null);
   const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
 
   useEffect(() => {
@@ -26,7 +28,9 @@ export default function Dashboard({ profile, onJoinRoom, activeRoomId, onReturnT
     const unsubscribe = onValue(usersRef, (snap) => {
       const data = snap.val();
       if (data) {
-        setAllUsers(Object.entries(data).map(([uid, val]: [string, any]) => ({ uid, ...val } as UserProfile)));
+        const users = Object.entries(data).map(([uid, val]: [string, any]) => ({ uid, ...val } as UserProfile));
+        const uniqueUsers = Array.from(new Map(users.map(u => [u.uid, u])).values());
+        setAllUsers(uniqueUsers);
       } else {
         setAllUsers([]);
       }
@@ -51,9 +55,10 @@ export default function Dashboard({ profile, onJoinRoom, activeRoomId, onReturnT
           id,
           ...val
         }) as RoomType);
+        const uniqueRooms = Array.from(new Map(roomList.map(r => [r.id, r])).values());
         // Sort by createdAt desc manually since RTDB doesn't have orderBy like Firestore in simple onValue
-        roomList.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        setRooms(roomList);
+        uniqueRooms.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        setRooms(uniqueRooms);
       } else {
         setRooms([]);
       }
@@ -63,29 +68,39 @@ export default function Dashboard({ profile, onJoinRoom, activeRoomId, onReturnT
     return () => unsubscribe();
   }, []);
 
-  const handleCreateRoom = async (e: React.FormEvent) => {
+  const handleSaveRoom = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newRoomName.trim()) return;
 
     try {
-      const roomsRef = ref(db, 'rooms');
-      const newRoomRef = push(roomsRef);
-      await set(newRoomRef, {
-        name: newRoomName,
-        description: newRoomDesc || null,
-        password: newRoomPass || null,
-        hasPassword: !!newRoomPass,
-        createdBy: profile.uid,
-        createdAt: new Date().toISOString(),
-        activeHosts: []
-      });
+      if (editingRoom) {
+        await update(ref(db, `rooms/${editingRoom.id}`), {
+          name: newRoomName,
+          description: newRoomDesc || null,
+          password: newRoomPass || null,
+          hasPassword: !!newRoomPass,
+        });
+      } else {
+        const roomsRef = ref(db, 'rooms');
+        const newRoomRef = push(roomsRef);
+        await set(newRoomRef, {
+          name: newRoomName,
+          description: newRoomDesc || null,
+          password: newRoomPass || null,
+          hasPassword: !!newRoomPass,
+          createdBy: profile.uid,
+          createdAt: new Date().toISOString(),
+          activeHosts: []
+        });
+      }
 
       setNewRoomName('');
       setNewRoomDesc('');
       setNewRoomPass('');
+      setEditingRoom(null);
       setShowCreate(false);
     } catch (error) {
-      handleRTDBError(error, OperationType.CREATE, 'rooms');
+      handleRTDBError(error, editingRoom ? OperationType.UPDATE : OperationType.CREATE, 'rooms');
     }
   };
 
@@ -94,9 +109,10 @@ export default function Dashboard({ profile, onJoinRoom, activeRoomId, onReturnT
   const handleDeleteRoom = async (id: string) => {
     try {
       await remove(ref(db, `rooms/${id}`));
-      setDeletingId(null);
     } catch (error) {
       handleRTDBError(error, OperationType.DELETE, `rooms/${id}`);
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -166,28 +182,38 @@ export default function Dashboard({ profile, onJoinRoom, activeRoomId, onReturnT
                 <button onClick={() => setShowUserManagement(false)} className="text-slate-400 hover:text-white">Tutup</button>
               </div>
               <div className="space-y-4">
-                {allUsers.map((u) => (
-                  <div key={u.uid} className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-3 sm:p-4 bg-white/5 rounded-xl gap-3 sm:gap-4">
-                    <div className="flex items-center gap-3">
-                      <img src={u.photoURL} alt={u.displayName} className="w-8 h-8 sm:w-10 sm:h-10 rounded-full" />
-                      <div>
-                        <p className="font-bold text-sm sm:text-base">{u.displayName}</p>
-                        <p className="text-xs sm:text-sm text-slate-400">{u.email}</p>
+                {(() => {
+                  const seenKeys = new Set();
+                  return allUsers.map((u) => {
+                    if (!u.uid) return null;
+                    if (seenKeys.has(u.uid)) {
+                      console.error('Duplicate key detected in Dashboard user list:', u.uid);
+                    }
+                    seenKeys.add(u.uid);
+                    return (
+                      <div key={`dashboard-user-${u.uid}`} className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-3 sm:p-4 bg-white/5 rounded-xl gap-3 sm:gap-4">
+                        <div className="flex items-center gap-3">
+                          <img src={u.photoURL} alt={u.displayName} className="w-8 h-8 sm:w-10 sm:h-10 rounded-full" />
+                          <div>
+                            <p className="font-bold text-sm sm:text-base">{u.displayName}</p>
+                            <p className="text-xs sm:text-sm text-slate-400">{u.email}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 w-full sm:w-auto">
+                          <select 
+                            value={u.role}
+                            onChange={(e) => updateUserRole(u.uid, e.target.value as any)}
+                            className="bg-white/10 border border-white/10 rounded-lg px-2 py-1.5 sm:px-3 sm:py-2 text-xs sm:text-sm w-full sm:w-auto"
+                          >
+                            <option value="admin">Admin</option>
+                            <option value="host">Host</option>
+                            <option value="listener">Pendengar</option>
+                          </select>
+                        </div>
                       </div>
-                    </div>
-                    <div className="flex items-center gap-2 w-full sm:w-auto">
-                      <select 
-                        value={u.role}
-                        onChange={(e) => updateUserRole(u.uid, e.target.value as any)}
-                        className="bg-white/10 border border-white/10 rounded-lg px-2 py-1.5 sm:px-3 sm:py-2 text-xs sm:text-sm w-full sm:w-auto"
-                      >
-                        <option value="admin">Admin</option>
-                        <option value="host">Host</option>
-                        <option value="listener">Pendengar</option>
-                      </select>
-                    </div>
-                  </div>
-                ))}
+                    );
+                  });
+                })()}
               </div>
             </motion.div>
           </div>
@@ -195,7 +221,13 @@ export default function Dashboard({ profile, onJoinRoom, activeRoomId, onReturnT
       </AnimatePresence>
 
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <h2 className="text-2xl font-bold text-center w-full sm:text-left sm:w-auto">Ruangan Tersedia</h2>
+        <motion.h2 
+          className="text-2xl font-bold text-center w-full sm:text-left sm:w-auto"
+          animate={{ opacity: [1, 0.4, 1] }}
+          transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+        >
+          Realtime Voice
+        </motion.h2>
         <div className="flex gap-2 w-full sm:w-auto">
           {profile.role === 'admin' && (
             <button 
@@ -224,7 +256,8 @@ export default function Dashboard({ profile, onJoinRoom, activeRoomId, onReturnT
             exit={{ opacity: 0, height: 0 }}
             className="overflow-hidden"
           >
-            <form onSubmit={handleCreateRoom} className="glass-card p-4 sm:p-6 space-y-4">
+            <form onSubmit={handleSaveRoom} className="glass-card p-4 sm:p-6 space-y-4">
+              <h2 className="text-xl font-bold">{editingRoom ? 'Edit Ruangan' : 'Buat Ruangan'}</h2>
               <div>
                 <label className="block text-sm font-medium text-slate-400 mb-1">Nama Ruangan</label>
                 <input 
@@ -256,8 +289,8 @@ export default function Dashboard({ profile, onJoinRoom, activeRoomId, onReturnT
                 />
               </div>
               <div className="flex gap-3 pt-2">
-                <button type="submit" className="btn-primary flex-1 py-3">Buat</button>
-                <button type="button" onClick={() => setShowCreate(false)} className="btn-secondary flex-1 py-3">Batal</button>
+                <button type="submit" className="btn-primary flex-1 py-3">{editingRoom ? 'Simpan' : 'Buat'}</button>
+                <button type="button" onClick={() => {setShowCreate(false); setEditingRoom(null);}} className="btn-secondary flex-1 py-3">Batal</button>
               </div>
             </form>
           </motion.div>
@@ -265,50 +298,34 @@ export default function Dashboard({ profile, onJoinRoom, activeRoomId, onReturnT
       </AnimatePresence>
 
       <div className="grid grid-cols-2 gap-3 sm:gap-4">
-        {rooms.map((room) => (
-          <motion.div 
-            key={room.id}
-            layout
-            className={`glass-card p-3 sm:p-6 flex flex-col justify-between transition-all ${activeRoomId === room.id ? 'ring-2 ring-indigo-500 bg-indigo-500/5' : ''}`}
-          >
-            <div>
-              <div className="flex items-start justify-between mb-1 sm:mb-2">
-                <div className="flex items-center gap-1 sm:gap-2">
-                  <h3 className="text-sm sm:text-xl font-bold truncate max-w-[80px] sm:max-w-none">{room.name}</h3>
-                  {activeRoomId === room.id && (
-                    <span className="bg-green-500/20 text-green-400 text-[8px] sm:text-[10px] uppercase px-1.5 sm:px-2 py-0.5 rounded-full font-bold">Aktif</span>
-                  )}
-                </div>
-                {room.hasPassword && <Lock className="w-3 h-3 sm:w-4 sm:h-4 text-slate-500" />}
-              </div>
-              {room.description && (
-                <p className="text-[10px] sm:text-sm text-slate-300 mb-2 sm:mb-4 line-clamp-1 sm:line-clamp-2">{room.description}</p>
-              )}
-              <div className="flex items-center gap-2 sm:gap-4 text-[10px] sm:text-sm text-slate-400 mb-3 sm:mb-6">
-                <span className="flex items-center gap-1">
-                  <Users className="w-3 h-3 sm:w-4 sm:h-4" /> {Object.keys(room.participants || {}).length}
-                </span>
-              </div>
-            </div>
-            
-            <div className="flex flex-col sm:flex-row gap-1.5 sm:gap-2">
-              <button 
-                onClick={() => activeRoomId === room.id ? onReturnToRoom?.() : onJoinRoom(room)}
-                className={`btn-primary py-1.5 sm:py-2 flex-1 flex items-center justify-center gap-1 sm:gap-2 text-[10px] sm:text-sm ${activeRoomId === room.id ? 'bg-indigo-600' : ''}`}
-              >
-                <LogIn className="w-3 h-3 sm:w-4 sm:h-4" /> {activeRoomId === room.id ? 'Kembali' : 'Gabung'}
-              </button>
-              {profile.role === 'admin' && (
-                <button 
-                  onClick={() => setDeletingId(room.id)}
-                  className="p-1.5 sm:p-2 bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded-lg sm:rounded-xl transition-colors flex items-center justify-center"
-                >
-                  <Trash2 className="w-4 h-4 sm:w-5 sm:h-5" />
-                </button>
-              )}
-            </div>
-          </motion.div>
-        ))}
+        {(() => {
+          const seenKeys = new Set();
+          return rooms.map((room) => {
+            if (!room.id) return null;
+            if (seenKeys.has(room.id)) {
+              console.error('Duplicate key detected in Dashboard room list:', room.id);
+            }
+            seenKeys.add(room.id);
+            return (
+              <RoomCard 
+                key={`room-${room.id}`}
+                room={room}
+                activeRoomId={activeRoomId}
+                onJoinRoom={onJoinRoom}
+                onReturnToRoom={onReturnToRoom}
+                profile={profile}
+                onDelete={setDeletingId}
+                onEdit={(room) => {
+                  setEditingRoom(room);
+                  setNewRoomName(room.name);
+                  setNewRoomDesc(room.description || '');
+                  setNewRoomPass(room.password || '');
+                  setShowCreate(true);
+                }}
+              />
+            );
+          });
+        })()}
         {rooms.length === 0 && (
           <div className="col-span-full py-20 text-center glass-card">
             <p className="text-slate-500">Tidak ada ruangan tersedia. {profile.role === 'admin' ? 'Buat satu untuk memulai!' : 'Tunggu admin membuat ruangan.'}</p>
